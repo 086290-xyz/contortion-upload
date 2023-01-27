@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Upload to contortion-db</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link
+      href="https://unpkg.com/filepond/dist/filepond.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://unpkg.com/filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div style="display: flex; margin-bottom: 20px">
+      <input type="text" id="token" style="flex-grow: 1" />
+      <button type="button" onclick="upload()">Upload</button>
+    </div>
+    <div id="uploader"></div>
+    <p id="log"></p>
+    <script src="https://unpkg.com/filepond-plugin-file-validate-type/dist/filepond-plugin-file-validate-type.js"></script>
+    <script src="https://unpkg.com/filepond-plugin-image-preview/dist/filepond-plugin-image-preview.js"></script>
+    <script src="https://unpkg.com/filepond/dist/filepond.js"></script>
+    <script src="https://unpkg.com/base64-js@1.5.1/base64js.min.js"></script>
+    <script>
+      "TOKEN" in localStorage
+        ? (document.querySelector("#token").value = localStorage.TOKEN)
+        : void 0;
+      /**
+       * @param base64 {string}
+       */
+      function decodeBase64(base64) {
+        return new TextDecoder().decode(base64js.toByteArray(base64.trim()));
+      }
+      /**
+       * @param buf {ArrayBuffer | string}
+       */
+      function encodeBase64(buf) {
+        if (typeof buf === "string") {
+          return base64js.fromByteArray(new TextEncoder().encode(buf));
+        } else {
+          return base64js.fromByteArray(new Uint8Array(buf));
+        }
+      }
+      function log(txt) {
+        console.log(txt);
+        document.querySelector("#log").append(txt);
+        document.querySelector("#log").append(document.createElement("br"));
+      }
+      FilePond.registerPlugin(
+        FilePondPluginFileValidateType,
+        FilePondPluginImagePreview
+      );
+      let num = 10;
+      const pond = FilePond.create({
+        allowMultiple: true,
+        name: "filepond",
+        acceptedFileTypes: ["image/*"],
+      });
+      document.querySelector("#uploader").appendChild(pond.element);
+      console.log(pond);
+      async function upload() {
+        localStorage.TOKEN = document.querySelector("#token").value;
+        const files = pond.getFiles();
+        if (files.length === 0) {
+          alert("No file");
+          return;
+        }
+        const TOKEN = localStorage.TOKEN;
+        log(`TOKEN is ${TOKEN}`);
+        const json = await fetch(
+          `https://api.github.com/repos/086290-xyz/contortion-database/contents/NEXT`,
+          {
+            headers: {
+              Authorization: `Bearer ${TOKEN}`,
+            },
+          }
+        ).then((r) => r.json());
+        if (json.encoding !== "base64") {
+          alert(`Unknown encoding ${json.encoding}. Aborted.`);
+          return;
+        }
+        const decoded = decodeBase64(json.content).trim();
+        let next = Number(decoded);
+        const nextSha = json.sha;
+        log(`NEXT is ${next}`);
+        if (Number.isNaN(next)) {
+          alert(`NEXT content "${next}" invalid. Aborted.`);
+          return;
+        }
+        for (const file of files) {
+          const newName = `${next}.${file.fileExtension}`;
+          log(`Upload ${file.filename} as ${newName}`);
+          console.log(file.file);
+          const buf = await file.file.arrayBuffer();
+          const base64 = encodeBase64(buf);
+          log(`${newName}: base64 done. Prepare uploading`);
+          const result = await fetch(
+            `https://api.github.com/repos/086290-xyz/contortion-database/contents/${newName}`,
+            {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${TOKEN}`,
+              },
+              body: JSON.stringify({
+                message: `Add ${newName}`,
+                content: base64,
+              }),
+            }
+          ).then((r) => r.json());
+          if ("commit" in result) {
+            log(`${newName}: Commit success. Commit ID: ${result.commit.sha}`);
+          } else {
+            alert(`${newName}: Commit failed! Check the error at devtools.`);
+            console.error(result);
+            return;
+          }
+          log(`${newName}: OK!`);
+          next++;
+        }
+        log(`Then, update NEXT now.`);
+        const result = await fetch(
+          `https://api.github.com/repos/086290-xyz/contortion-database/contents/NEXT`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${TOKEN}`,
+            },
+            body: JSON.stringify({
+              message: `Update NEXT`,
+              content: encodeBase64(next.toString()),
+              sha: nextSha,
+            }),
+          }
+        ).then((r) => r.json());
+        if ("commit" in result) {
+          log(`NEXT updated. Commit ID: ${result.commit.sha}`);
+        } else {
+          alert(`Update NEXT failed! Check the error at devtools.`);
+          console.error(result);
+          return;
+        }
+        console.log("All done.");
+      }
+    </script>
+  </body>
+</html>
